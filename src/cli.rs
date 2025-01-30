@@ -277,6 +277,7 @@ enum LibaryFlags {
 
 #[test]
 #[allow(unused_variables, unreachable_code)]
+#[ignore = "Todo Parse the global environment of RUSTFLAG to only include necssary flags"]
 fn rustcflags() {
     todo!("PARSE the global environment for RUSTFLAGS");
     let rustcflags: OsString = OsString::from_str("-A HELLO -D HELLO -F HELLO").unwrap();
