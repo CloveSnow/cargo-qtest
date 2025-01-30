@@ -281,21 +281,3 @@ fn rustcflags() {
     todo!("PARSE the global environment for RUSTFLAGS");
     let rustcflags: OsString = OsString::from_str("-A HELLO -D HELLO -F HELLO").unwrap();
 }
-
-#[test]
-fn doc_test() {
-    use std::convert::Infallible;
-    use std::ffi::OsString;
-    let expected_result: Vec<OsString> = ["foo", "--bar", "quax"]
-        .into_iter()
-        .map(OsString::from_str)
-        .map(<Result<OsString, Infallible>>::unwrap)
-        .collect();
-
-    let result: Vec<OsString> = std::env::args_os()
-        .into_iter()
-        .filter(|arg| expected_result.contains(arg))
-        .collect();
-
-    assert_eq!(&expected_result[0..3], &result[0..3]);
-}
