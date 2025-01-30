@@ -1,0 +1,8 @@
+[package]
+name = "cargo-qtest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cargo_metadata = "0.19.1"
+clap = { version = "4.5.27", features = ["derive"] }
