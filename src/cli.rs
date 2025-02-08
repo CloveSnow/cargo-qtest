@@ -5,26 +5,35 @@ use clap::{
 };
 use std::default;
 use std::ffi::OsString;
+use std::ops::Deref;
 use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Default)]
-pub enum Qtest {
-    RunQtest {
-        test_module: String,
-        targets: Option<Vec<String>>,
-        args: Option<Vec<String>>,
-    },
-    QueryTest {
-        test_module: String,
-    },
-    QueryTestModule,
-    Clean,
+pub enum CliQtest {
+    RunQtest(RunQtest),
+    QueryTest(QueryTest),
     All,
     #[default]
     NoOp,
 }
 
-impl Qtest {
+#[derive(Debug, PartialEq, Eq)]
+pub struct RunQtest {
+    pub test_module: Vec<String>,
+    pub targets: Option<Vec<String>>,
+    pub args: Option<Vec<String>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct QueryTest(Option<String>);
+
+impl CliQtest {
+    const ID_TEST_MODULE: &str = "test_module";
+    const ID_TARGETS: &str = "targets";
+    const ID_LIST_TEST: &str = "list";
+    const ID_ALL: &str = "ALL";
+    const ID_ARGS: &str = "ARGS";
+
     pub fn new() -> clap::Command {
         clap::Command::new("cargo-qtest")
             .about("A Hack for prototyping and Seperate Multiple test into TEST MODULE")
@@ -33,47 +42,36 @@ impl Qtest {
             .arg_required_else_help(true)
             .group(
                 ArgGroup::new("RUN")
-                    .args(["test_module", "list_test", "args"])
+                    .args([Self::ID_TARGETS, Self::ID_ARGS])
+                    .requires(Self::ID_TEST_MODULE)
                     .multiple(true),
             )
             .arg(
-                Arg::new("test_module")
+                Arg::new(Self::ID_TEST_MODULE)
                     .value_name("TEST MODULE")
                     .help("The TEST MODULE to run")
                     .value_parser(ValueParser::string())
-                    .action(ArgAction::Set)
-                    .group("TEST MODULE"), // .index(1),
+                    .action(ArgAction::Append),
             )
             .arg(
-                Arg::new("targets")
+                Arg::new(Self::ID_TARGETS)
                     .value_name("TARGET")
                     .short('t')
                     .long("targets")
                     .help("Run the targets test within <TEST MODULE>")
-                    .requires("test_module")
                     .num_args(1..)
-                    .value_parser(ValueParser::string())
+                    .action(ArgAction::Append),
+            )
+            .arg(
+                Arg::new(Self::ID_LIST_TEST)
+                    .short('l')
+                    .long("list-test")
+                    .help("List or query all the test and modules")
+                    .exclusive(true)
                     .action(ArgAction::Set),
             )
             .arg(
-                Arg::new("list_module")
-                    .short('m')
-                    .long("list-module")
-                    .help("List all the TEST MODULE")
-                    .exclusive(true)
-                    .action(ArgAction::SetTrue),
-            )
-            .arg(
-                Arg::new("list_test")
-                    .short('f')
-                    .long("list-test")
-                    .help("List all the test within the <TEST MODULE>")
-                    .requires("test_module")
-                    .conflicts_with("list_module")
-                    .action(ArgAction::SetTrue),
-            )
-            .arg(
-                Arg::new("all")
+                Arg::new(Self::ID_ALL)
                     .short('a')
                     .long("all")
                     .help("Run all tests")
@@ -81,24 +79,16 @@ impl Qtest {
                     .action(ArgAction::SetTrue),
             )
             .arg(
-                Arg::new("clean")
-                    .short('c')
-                    .long("clean")
-                    .help("Clean qtest from manifest")
-                    .exclusive(true)
-                    .action(ArgAction::SetTrue),
-            )
-            .arg(
-                Arg::new("args")
+                Arg::new(Self::ID_ARGS)
                     .value_name("ARGS...")
                     .help("Pass flags and arguments to the test binary")
                     .long_help(DESCPASSARG)
-                    .requires("TEST MODULE")
                     .allow_hyphen_values(true)
                     .last(true),
             )
     }
 }
+
 const DESCPASSARG: &'static str = r#"Pass flags and arguments to the test binary
 Example
 ```rust
@@ -124,7 +114,11 @@ fn module() {
     $ cargo qtest module -- foo --bar quax
 ```
 "#;
-impl CommandFactory for Qtest {
+
+impl CliQtest {}
+
+impl Parser for CliQtest {}
+impl CommandFactory for CliQtest {
     fn command() -> clap::Command {
         Self::new()
     }
@@ -134,45 +128,88 @@ impl CommandFactory for Qtest {
     }
 }
 
-impl Qtest {
+trait ArgMatchExt: QtestType {
+    fn extract(matches: &mut ArgMatches, id: &str) -> Self;
+}
+impl ArgMatchExt for Option<Vec<String>> {
+    fn extract(matches: &mut ArgMatches, id: &str) -> Self {
+        matches.remove_many(id).map(|v| v.into_iter().collect())
+    }
+}
+impl ArgMatchExt for Option<String> {
+    fn extract(matches: &mut ArgMatches, id: &str) -> Self {
+        matches.remove_one(id)
+    }
+}
+impl ArgMatchExt for String {
+    fn extract(matches: &mut ArgMatches, id: &str) -> Self {
+        matches.remove_one(id).unwrap()
+    }
+}
+impl ArgMatchExt for Vec<String> {
+    fn extract(matches: &mut ArgMatches, id: &str) -> Self {
+        matches
+            .remove_many(id)
+            .map(|v| v.into_iter().collect())
+            .unwrap()
+    }
+}
+impl ArgMatchExt for bool {
+    fn extract(matches: &mut ArgMatches, id: &str) -> Self {
+        matches.get_flag(id)
+    }
+}
+struct ArgMatches1(ArgMatches);
+trait QtestType {}
+impl QtestType for String {}
+impl QtestType for Option<String> {}
+impl QtestType for Vec<String> {}
+impl QtestType for Option<Vec<String>> {}
+impl QtestType for bool {}
+impl ArgMatches1 {
+    fn extract<T: QtestType + ArgMatchExt>(&mut self, id: &str) -> T {
+        T::extract(&mut self.0, id)
+    }
+}
+impl Deref for ArgMatches1 {
+    type Target = ArgMatches;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl CliQtest {
     fn from_args(mut args: ArgMatches) -> Self {
-        if args.contains_id("test_module") {
-            let test_module = args.remove_one("test_module").unwrap();
+        let mut args = ArgMatches1(args);
+        if args.extract(Self::ID_ALL) {
+            return Self::All;
+        }
 
-            if args.get_flag("list_test") {
-                return Self::QueryTest { test_module };
-            }
+        if args.contains_id(Self::ID_TEST_MODULE) {
+            let test_module = args.extract(Self::ID_TEST_MODULE);
 
-            let targets = match args.remove_many::<String>("targets") {
-                None => None,
-                Some(targets) => Some(targets.map(|target| target).collect()),
-            };
+            let targets = args.extract(Self::ID_TARGETS);
+            let args = args.extract(Self::ID_ARGS);
 
-            let args = match args.remove_many::<String>("args") {
-                None => None,
-                Some(args) => Some(args.map(|arg| arg).collect()),
-            };
-
-            return Self::RunQtest {
+            return Self::RunQtest(RunQtest {
                 test_module,
                 targets,
                 args,
-            };
+            });
         };
-        if args.get_flag("all") {
+        if args.contains_id(Self::ID_LIST_TEST) {
+            return Self::QueryTest(QueryTest(args.extract(Self::ID_LIST_TEST)));
+        };
+
+        if args.extract(Self::ID_ALL) {
             return Self::All;
-        }
-        if args.get_flag("list_module") {
-            return Self::QueryTestModule;
-        }
-        if args.get_flag("clean") {
-            return Self::Clean;
         }
         return Self::NoOp;
     }
 }
 
-impl FromArgMatches for Qtest {
+impl FromArgMatches for CliQtest {
     fn from_arg_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
         let args = matches.clone();
         Ok(Self::from_args(args))
@@ -185,73 +222,114 @@ impl FromArgMatches for Qtest {
     }
 }
 
-impl Parser for Qtest {}
-
 #[cfg(test)]
-mod test_qtest {
+mod tests {
+    use super::*;
+    macro_rules! test {
+        ([$($args: literal),*$(,)?], $($id: path [ $type: ty]  => $expected_value: expr ),+$(,)?) => {
 
-    use clap::{FromArgMatches, Parser};
+            let mut matches = CliQtest::new().try_get_matches_from([$($args,)*]).unwrap();
+            let mut matches = ArgMatches1(matches);
+            $(
+                let field = matches.extract::<$type>($id);
+                if field == $expected_value {
 
-    use super::Qtest;
+                }
 
-    fn produce_test<const N: usize>(
-        will_pass: bool,
-        args: [&'static str; N],
-        expected_result: Qtest,
-    ) {
-        let matches = Qtest::new().get_matches_from(args);
-        let result = match (Qtest::from_arg_matches(&matches), will_pass) {
-            (Ok(result), true) => result,
-            (Err(_), false) => return,
-            (Ok(_), false) => panic!("The arguments was expected to fail to be parsed"),
-            (Err(_), true) => panic!("The arguments was expected to successfully parsed"),
+                // eprintln!("Line {}, {}={:#?}", line!(), $id, &field);
+                assert_eq!(field, $expected_value, "Test was expected to pass: {:#?}", $id);
+            )+
         };
-        assert_eq!(result, expected_result,);
+        (@PASS, $name: ident, $({@ARGS: [$($args: literal),*], $($id: path[$type: ty] => $expected_value: expr),+$(,)?},)+) => {
+            #[test]
+            fn $name() {
+                $(
+                    test!([$($args,)*], $($id[$type] => $expected_value),+);
+                )+
+            }
+        };
+        (@FAIL, $name: ident, $({@ARGS: [$($args: literal),*], $($id: path[$type: ty] => $expected_value: expr),+$(,)?},)+) => {
+            #[test]
+            #[should_panic]
+            fn $name() {
+                $(
+                    test!([$($args,)*], $($id [ $type ] => $expected_value,)+);
+                )*
+            }
+        };
     }
-    #[test]
-    fn cli_qtest() {
-        produce_test(
-            true,
-            ["module"],
-            Qtest::RunQtest {
-                test_module: "module".into(),
-                targets: None,
-                args: None,
-            },
-        );
-        produce_test(
-            true,
-            ["module", "-f"],
-            Qtest::QueryTest {
-                test_module: "module".into(),
-            },
-        );
-        produce_test(
-            true,
-            ["--list-module"],
-            Qtest::QueryTest {
-                test_module: "module".into(),
-            },
-        );
-        produce_test(
-            true,
-            ["module", "--list-test"],
-            Qtest::QueryTest {
-                test_module: "module".into(),
-            },
-        );
-        produce_test(true, ["-a"], Qtest::All);
-        produce_test(true, ["--all"], Qtest::All);
-        produce_test(false, ["--all -l"], Default::default());
-        produce_test(false, ["module", "--list-module"], Default::default());
-        produce_test(false, ["--list-test"], Default::default());
+    macro_rules! strings {
+        ($($str: literal),*) => {
+            vec![$(String::from($str),)*]
+        };
     }
+    macro_rules! string {
+        ($str: literal) => {
+            String::from($str)
+        };
+    }
+    type Tests = Vec<String>;
+    type Target = Option<Vec<String>>;
+    type Args = Option<Vec<String>>;
+    type All = bool;
+    type List = Option<String>;
+
+    test!(@PASS, pass,
+        {
+            @ARGS: ["cargo-qtest", "module"],
+            CliQtest::ID_TEST_MODULE[Tests] => strings!("module"),
+            CliQtest::ID_TARGETS[Target] => None,
+            CliQtest::ID_ARGS[Args] => None,
+        },
+        {
+            @ARGS: ["cargo-qtest", "module", "module2"],
+            CliQtest::ID_TEST_MODULE[Tests] => strings!("module", "module2"),
+            CliQtest::ID_TARGETS[Target] => None,
+            CliQtest::ID_ARGS[Args] => None,
+        },
+        {
+            @ARGS: ["cargo-qtest", "module", "-t", "foo"],
+            CliQtest::ID_TEST_MODULE[Tests] => strings!("module"),
+            CliQtest::ID_TARGETS[Target] => Some(strings!("foo")),
+            CliQtest::ID_ARGS[Args] => None,
+        },
+        {
+            @ARGS: ["cargo-qtest", "-l", "gellfj" ],
+            CliQtest::ID_LIST_TEST[List] => Some(string!("gellfj")),
+        },
+        {
+            @ARGS: ["cargo-qtest", "-a" ],
+            CliQtest::ID_ALL[All] => true,
+        },
+    );
+    test!(@FAIL, fail,
+        {
+            @ARGS: ["cargo-qtest", "module", "-t" ],
+            CliQtest::ID_TEST_MODULE[Tests] => strings!("module"),
+            CliQtest::ID_ARGS[Args] => None,
+            CliQtest::ID_TARGETS[Target] => None,
+        },
+        {
+            @ARGS: ["cargo-qtest", "module", "module2", "-a" ],
+            CliQtest::ID_TEST_MODULE[Tests] => strings!("module", "module2"),
+            CliQtest::ID_ALL[All] => false,
+        },
+        {
+            @ARGS: ["cargo-qtest", "module", "-l" ],
+            CliQtest::ID_TEST_MODULE[Tests] => strings!("module"),
+            CliQtest::ID_LIST_TEST[Args] => None,
+        },
+        {
+            @ARGS: ["cargo-qtest", "-a",  "jfjjf"],
+            CliQtest::ID_ALL[All] => false,
+        },
+    );
 }
 
 // Reference
 // https://manpages.org/rustc
 // Enviroment flags we must remove
-struct RustcFlags {
+pub struct RustcFlags {
     // #[arg(short = 'A', long)]
     allow: Option<Vec<String>>,
     // #[arg(short = 'D', long)]
